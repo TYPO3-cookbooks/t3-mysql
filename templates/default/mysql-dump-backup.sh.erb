@@ -1,0 +1,273 @@
+#!/bin/bash
+
+# Version:     $Rev$
+# Last change: $Date$
+# Authors:     Stefan Preissner <stefan.preissner@cs2.ch>, Michael Stucki <michael.stucki@typo3.org>
+# Description: This script dumps all databases available on the given mysql server
+
+# How this script works:
+#
+# 1. Search for all databases and walk through each one
+# 2. Remove ignored tables
+# 3. Remove tables that were not changed recently
+# 4. Dump all remaining tables
+#
+# If anything in steps 2 or 3 fails, the script will just dump all tables every time.
+
+# MySQL hostname
+MYHOSTNAME="localhost"
+# MySQL username (only databases available for this user can be dumped!)
+MYUSERNAME="root"
+# MySQL password
+MYPASSWORD="<%= node['mysql']['server_root_password'] %>"
+
+# Path to MySQL data dir
+MYDATADIR="/var/lib/mysql"
+
+# Absolute path where the dumps will be saved
+BACKUPDIR="/var/backups/mysql"
+
+# Ignore these TYPO3 tables in every database
+# Note: cache_md5params is currently not excluded due to external links depending on MD5 parameters in URLs
+SKIP_TABLES_TYPO3="cache_extensions cache_hash cache_imagesizes cache_pages cache_pagesection cache_treelist cache_typo3temp_log index_debug index_fulltext index_grlist index_phash index_rel index_section index_words tx_realurl_chashcache tx_realurl_pathcache tx_realurl_urldecodecache tx_realurl_urlencodecache tx_solr_statistics tx_devlog"
+# Ignore these Magento tables in every database
+SKIP_TABLES_MAGENTO="log_customer log_quote log_summary log_summary_type log_url log_url_info log_visitor log_visitor_info log_visitor_online"
+# Skip these databases
+SKIP_DATABASES="information_schema"
+
+# Verbosity level (0=quiet, 1=notice, 2=info 3 = debug)
+VERBOSITY=1
+
+# Force backup on all tables
+FORCE_FULL_BACKUP=0
+
+# Files older than $MAX_AGE hours will be skipped
+MAX_AGE=24
+
+if [ -e /etc/default/custom-mysql-backup ]; then
+	# Include configuration file, if present
+	. /etc/default/custom-mysql-backup
+fi
+
+# Strip trailing slashes
+BACKUPDIR=$(echo "$BACKUPDIR" | sed "s#/\$##")
+MYDATADIR=$(echo "$MYDATADIR" | sed "s#/\$##")
+
+# Create the backup directory if it is missing
+test -d $BACKUPDIR || mkdir -p $BACKUPDIR
+
+# Make sure that only root can access these files
+chown root:root $BACKUPDIR
+chmod 700 $BACKUPDIR
+
+########
+
+# Run a MySQL query
+function mysql_exec() {
+	local QUERY=$1
+	mysql --host $MYHOSTNAME --user $MYUSERNAME --password=$MYPASSWORD --batch --silent --execute="$QUERY"
+	return $?
+}
+
+# Run mysqldump
+function mysql_dump() {
+	local PARAMS=$1
+	mysqldump --host $MYHOSTNAME --user $MYUSERNAME --password=$MYPASSWORD --skip-lock-tables --skip-extended-insert $PARAMS
+	return $?
+}
+
+# Get list of databases
+function get_databases() {
+	local QUERY="SHOW DATABASES;"
+	mysql_exec "$QUERY"
+	return $?
+}
+
+# Get list of all tables
+function get_all_tables() {
+	local DATABASE=$1
+	mysql_exec "SHOW TABLES FROM \`$DATABASE\`"
+	return $?
+}
+
+# Get list of tables which have not been changed since $MAX_AGE
+function get_unchanged_tables() {
+	local DATABASE=$1
+	mysql_exec "SELECT table_name FROM information_schema.tables WHERE table_schema=\"$DATABASE\" AND update_time < NOW() - INTERVAL $MAX_AGE HOUR";
+	return $?
+}
+
+# Explicit search for InnoDB tables because these have update_time = NULL
+function get_innodb_tables_without_update_time() {
+	local DATABASE=$1
+	mysql_exec "SELECT table_name FROM information_schema.tables WHERE table_schema=\"$DATABASE\" AND engine=\"InnoDB\" AND update_time IS NULL"
+	return $?
+}
+
+# Normalize filenames for creating dumps
+function get_filename() {
+	local INPUT=$1
+	echo "$INPUT" | sed "s#[^A-Za-z0-9_\.\-]#_#g"
+	return $?
+}
+
+# Check if this table is on the ignore list
+# Return 0 only if the table is found on the ignore list
+function is_ignored_table() {
+	local TABLE=$1
+	local i
+
+	for i in $SKIP_TABLES_TYPO3 $SKIP_TABLES_MAGENTO; do
+		if [ "$i" = "$TABLE" ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+# Remove an element from an array
+function array_unset() {
+	local ARRAY=( $1 )
+	local KEY=$2
+	local INDEX=0
+	local i
+
+	for i in "${ARRAY[@]}"; do
+		if [ "$i" = "$KEY" ]; then
+			unset ARRAY[$INDEX]
+			echo "${ARRAY[@]}"
+			return 0
+		fi
+		((INDEX++))
+	done
+
+	echo "${ARRAY[@]}"
+	return 1
+}
+
+# Find raw MySQL files older than $MAX_AGE
+# Return 0 only if the file was found
+function find_old_raw_file() {
+	local DATABASE=$1
+	local FILENAME=$2
+	local i
+
+	# Make sure that $MYHOSTNAME is "localhost". Otherwise we may get wrong matches!
+	if [ "$MYHOSTNAME" != "localhost" ]; then
+		return 1
+	fi
+
+	# Check if the directory exists (check permissions if this fails)
+	if [ -d "$MYDATADIR/$DATABASE" ]; then
+		# Try to find the raw data file and check if it was modified since $MAX_AGE
+		i=$(find $MYDATADIR/$DATABASE/ -name "$FILENAME" -type f -mmin +$((60*$MAX_AGE)))
+		if [ -n "$i" ]; then
+			return 0
+		fi
+	fi
+
+	return 1
+}
+
+# Print message
+function print_msg() {
+	LEVEL=$1
+	MESSAGE=$2
+	if [ $VERBOSITY -gt $(($LEVEL-1)) ]; then
+		echo "$MESSAGE"
+	fi
+}
+
+
+# Get all databases and iterate them
+get_databases | while read DATABASE; do
+	# Check if the database is found in the exclude list
+	SKIP=0
+	for i in $SKIP_DATABASES; do
+		if [ "$DATABASE" = "$i" ]; then
+			SKIP=1
+		fi
+	done
+
+	if [ $SKIP = 0 ]; then
+		print_msg 1 "Dumping database $DATABASE..."
+
+		# Check if backup directory exists and create it if not
+		if [ ! -d "$BACKUPDIR/$(get_filename "$DATABASE")" ]; then
+			mkdir -p "$BACKUPDIR/$(get_filename "$DATABASE")"
+			IS_FIRST_BACKUP=1
+		else
+			IS_FIRST_BACKUP=0
+		fi
+
+		# Dump the MySQL schema of the database
+		mysql_dump "--no-data $DATABASE" > "$BACKUPDIR/$(get_filename "${DATABASE}_schema.sql")"
+
+		# Get list of tables
+		ALL_TABLES=( $(get_all_tables "$DATABASE") )
+		UNCHANGED_TABLES=( $(get_unchanged_tables "$DATABASE") )
+		INNODB_TABLES=( $(get_innodb_tables_without_update_time "$DATABASE") )
+
+		# Remove tables which are on the ignore list
+		if [ -n "$ALL_TABLES" ]; then
+			for i in ${ALL_TABLES[@]}; do
+				if is_ignored_table "$i"; then
+					# Remove the table from all lists
+					ALL_TABLES=( $(array_unset "$(echo ${ALL_TABLES[@]})" "$i") )			# \\" (fix highlighting in some editors)
+					UNCHANGED_TABLES=( $(array_unset "$(echo ${UNCHANGED_TABLES[@]})" "$i") )	# \\"
+					INNODB_TABLES=( $(array_unset "$(echo ${INNODB_TABLES[@]})" "$i") )		# \\"
+					print_msg 3 "Remove table: $i (ignore list)"
+				fi
+			done
+		fi
+
+		# Filter/exclude some tables
+		# Check modification time of tables to see if it was changed recently.
+		# This will massively speed up the backup procedure
+		#
+		# Only apply these filters if full backup is not forced and if there is already an existing backup
+		if [ $FORCE_FULL_BACKUP = 0 ] && [ $IS_FIRST_BACKUP = 0 ]; then
+			# Remove tables which have not been modified recently
+			if [ -n "$UNCHANGED_TABLES" ]; then
+				for i in ${UNCHANGED_TABLES[@]}; do
+					# Remove the table from the list
+					ALL_TABLES=( $(array_unset "$(echo ${ALL_TABLES[@]})" "$i") )			# \\"
+					print_msg 3 "Remove table: $i (unchanged)"
+				done
+			fi
+
+			# Remove InnoDB tables which have a filemtime of $TIMEOUT
+			if [ -n "$INNODB_TABLES" ]; then
+				for i in ${INNODB_TABLES[@]}; do
+					# If the *.ibd file was found and if it was older than $MAX_AGE, remove it from the list
+					if find_old_raw_file "$DATABASE" "$i.ibd"; then
+						# Remove the table from the list
+						ALL_TABLES=( $(array_unset "$(echo ${ALL_TABLES[@]})" "$i") )		# \\"
+						print_msg 3 "Remove table: $i (found old InnoDB file)"
+					fi
+				done
+			fi
+		fi
+
+		# Finally, make a dump of all remaining tables
+		if [ -n "$ALL_TABLES" ]; then
+			for i in ${ALL_TABLES[@]}; do
+				print_msg 2 "Dumping table $i..."
+				FILENAME_BASE="$BACKUPDIR/$(get_filename "$DATABASE")/$(get_filename "$i")"
+
+				# Remove existing (compressed or uncompressed) files, if any
+				test -f "$FILENAME_BASE.sql" && rm "$FILENAME_BASE.sql"
+				test -f "$FILENAME_BASE.sql.gz" && rm "$FILENAME_BASE.sql.gz"
+
+				# Dump the table
+				mysql_dump "$DATABASE $i" | gzip > "$FILENAME_BASE.sql.gz"
+
+				# Remove the table from the list
+				ALL_TABLES=( $(array_unset "$(echo ${ALL_TABLES[@]})" "$i") )				# \\"
+			done
+		fi
+	fi
+done
+
+exit 0
