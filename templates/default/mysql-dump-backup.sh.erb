@@ -260,8 +260,14 @@ get_databases | while read DATABASE; do
 				test -f "$FILENAME_BASE.sql" && rm "$FILENAME_BASE.sql"
 				test -f "$FILENAME_BASE.sql.gz" && rm "$FILENAME_BASE.sql.gz"
 
+				# Ignore the mysql.events table (suppress stupid warning)
+				IGNORE_EVENTS=""
+				if [ $DATABASE = "mysql" ] && [ $i = "event" ]; then
+					IGNORE_EVENTS="--events --ignore-table=mysql.event"
+				fi
+
 				# Dump the table
-				mysql_dump "$DATABASE $i" | gzip > "$FILENAME_BASE.sql.gz"
+				mysql_dump "$IGNORE_EVENTS $DATABASE $i" | gzip > "$FILENAME_BASE.sql.gz"
 
 				# Remove the table from the list
 				ALL_TABLES=( $(array_unset "$(echo ${ALL_TABLES[@]})" "$i") )				# \\"
