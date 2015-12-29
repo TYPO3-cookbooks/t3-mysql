@@ -1,0 +1,5 @@
+[mysqld]
+bind-address            = <%= node['mysql']['bind_address'] %>
+
+max_allowed_packet      = <%= node['t3-mysql']['tunable']['max_allowed_packet'] %>
+innodb_file_per_table   = <%= node['t3-mysql']['tunable']['innodb_file_per_table'] %>
