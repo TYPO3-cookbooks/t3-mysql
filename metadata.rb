@@ -5,5 +5,5 @@ license          "Apache 2.0"
 description      "A wrapper cookbook for mysql"
 version          "5.0.0"
 
-depends "mysql",    "= 5.6.3"
-depends "database", "= 2.3.1"
+depends "mysql",    "= 7.1.0"
+depends "database", "= 5.1.2"
