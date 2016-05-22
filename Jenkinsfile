@@ -21,7 +21,7 @@ def tk_instances = []
 
 // allocate a node for the smaller steps
 node {
-  slackSend message: "Build Started - ${env.JOB_NAME}: ${env.BUILD_NUMBER}", failOnError: false
+  // slackSend message: "Build Started - ${env.JOB_NAME}: ${env.BUILD_NUMBER}", failOnError: false
 
   stage 'clone cookbook'
   checkout scm
@@ -100,15 +100,17 @@ node {
 
   if (currentBuild.result == 'FAILURE') {
     error "Build failed"
-    slackSend message: "Build Failed - ${env.JOB_NAME}: ${env.BUILD_NUMBER}", failOnError: false, color: 'bad'
+    sh "echo slack disabled"
+    //slackSend message: "Build Failed - ${env.JOB_NAME}: ${env.BUILD_NUMBER}", failOnError: false, color: 'bad'
   } else {
-    slackSend message: "Build Successful - ${env.JOB_NAME}: ${env.BUILD_NUMBER}", failOnError: false, color: 'good'
+    sh "echo slack disabled"
+    // slackSend message: "Build Successful - ${env.JOB_NAME}: ${env.BUILD_NUMBER}", failOnError: false, color: 'good'
   }
 
 }
 
 node {
   stage 'upload'
-  sh 'echo berks upload'
+  sh 'echo berks upload [disabled!]'
 }
 
