@@ -6,4 +6,4 @@ description      "A wrapper cookbook for mysql"
 version          "5.0.0"
 
 depends "mysql",    "= 5.6.3"
-depends "database", "= 2.3.1"
+depends "database", ">= 6.0.0"
