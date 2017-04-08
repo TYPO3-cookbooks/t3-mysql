@@ -1,5 +1,4 @@
 Berksfile.lock
-tmp/
 .vagrant
 *~
 *#
@@ -7,7 +6,6 @@ tmp/
 \#*#
 .*.sw[a-z]
 *.un~
-/cookbooks
 
 # Bundler
 Gemfile.lock
@@ -16,3 +14,8 @@ bin/*
 
 .kitchen/
 .kitchen.local.yml
+test/integration/data_bags/certificates/wildcard_typo3_org.json
+.idea/
+
+# thor-scmversion
+VERSION
