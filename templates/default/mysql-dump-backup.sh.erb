@@ -72,7 +72,7 @@ function mysql_exec() {
 # Run mysqldump
 function mysql_dump() {
 	local PARAMS=$1
-	mysqldump --host $MYHOSTNAME --user $MYUSERNAME --password=$MYPASSWORD --skip-lock-tables --skip-extended-insert $PARAMS
+	mysqldump --host $MYHOSTNAME --user $MYUSERNAME --password=$MYPASSWORD --skip-lock-tables $PARAMS
 	return $?
 }
 
